@@ -1,0 +1,279 @@
+---
+title: 'Graduate lab: Testing macroecological predictions with NEON'
+author: "Quentin D. Read"
+date: "May 24, 2018"
+output: pdf_document
+---
+
+# Acknowledgments
+
+Some of this code is modified from the tutorial written by NEON data scientist Claire Lunch (see `https://www.neonscience.org/neon-api-usage`). She should be given appropriate credit.
+
+# Introduction describing NEON
+
+Insert text here.
+
+# Technical description of NEON data
+
+This lab is a walkthrough demonstrating how to use the API (application program interface) of NEON (National Ecological Observatory Network) to import and analyze data. Through the NEON project, ecological and environmental data are collected using standardized methods at many sites across the United States. NEON puts the data through a quality control "pipeline" and then hosts it on their web server. An API is an interface that allows the user to specify exactly which data they want to pull from NEON's data server. The user pastes together a web address using different codes to construct their query. When it is submitted to the API, the API returns the requested data in a standardized format called JSON (basically a text file with information that can be easily processed by a lot of different types of software). There is already R code written to put together API queries, automatically pull the data from NEON, and then translate the JSON into a data frame that we can easily work with in R. 
+
+NEON data are organized in a special structure. First, the data are grouped by data product. A data product would be something like air temperature, soil chemical composition, fish community composition, etc. The data products each have ID codes that you have to look up on the Data Product Catalog on NEON's website (`http://data.neonscience.org/data-product-catalog`) to be able to pull a particular product. Within each data product, the data are grouped by site, and within site they are grouped by month. So you could do something like pull all bird community data from the Great Smoky Mountains from July 2017.
+
+# R functions for pulling NEON data from the server
+
+## Function to display what data are available
+
+This function takes a NEON product code `productCode` as an argument, gets a list of the files that are available, and displays a representative set of file names from one site-month combination.
+
+```{r}
+display_neon_filenames <- function(productCode) {
+  require(httr)
+  require(jsonlite)
+  req <- GET(paste0("http://data.neonscience.org/api/v0/products/", productCode))
+  avail <- fromJSON(content(req, as = 'text'), simplifyDataFrame = TRUE, flatten = TRUE)
+  urls <- unlist(avail$data$siteCodes$availableDataUrls)
+  get_filenames <- function(x) fromJSON(content(GET(x), as = 'text'))$data$files$name
+  files_test <- sapply(urls, get_filenames, simplify = FALSE)
+  files_test[[which.max(sapply(files_test,length))]]
+}
+```
+
+## Function to pull all data for a given data product
+
+The first argument, `productCode` is a NEON product code, and the second, `nametag`, is an identifying string that tells the function which CSV to download for each site-month combination. There are usually a lot of metadata files that we aren't interested in for now that go along with the main data file for each site-month combination, and the `nametag` argument tells the function which file is the one that really has the data we want (details below). The `pkg` argument defaults to download the "basic" data package which is usually all we would want. Finally, the `bind` argument defaults to `TRUE` which means return a single data frame, not a list of data frames.
+
+There are two steps to what the function does: first it queries the API to get a list of URLs of the CSV files available for all site-month combinations for the desired data product. Second it loops through the subset of those URLs that match the `nametag` argument and tries to download them all. If one gives an error, there is a `try()` function built in so that the function will just skip that file instead of quitting.
+
+```{r}
+pull_all_neon_data <- function(productCode, nametag, pkg = 'basic', bind = TRUE) {
+  require(httr)
+  require(jsonlite)
+  require(dplyr)
+  
+  # Get list of URLs for all site - month combinations for that data product.
+  req <- GET(paste0("http://data.neonscience.org/api/v0/products/", productCode))
+  avail <- fromJSON(content(req, as = 'text'), simplifyDataFrame = TRUE, flatten = TRUE)
+  urls <- unlist(avail$data$siteCodes$availableDataUrls)
+  
+  # Loop through and get the data from each URL.
+  res <- list()
+  
+  pb <- txtProgressBar(min=0, max=length(urls), style=3)
+  count <- 0
+  
+  for (i in urls) {
+    count <- count + 1
+    setTxtProgressBar(pb, count)
+    # Get the URLs for the site-month combination
+    req_i <- GET(i)
+    files_i <- fromJSON(content(req_i, as = 'text'))
+    urls_i <- files_i$data$files$url
+    # Read data from the URLs given by the API, skipping URLs that return an error.
+    data_i <- try(read.delim(
+      grep(paste0('(.*',nametag,'.*', pkg, '.*)'), urls_i, value = TRUE), 
+      sep = ',', stringsAsFactors = FALSE), TRUE)
+    if (!inherits(data_i, 'try-error')) res[[length(res) + 1]] <- data_i
+  }
+  
+  close(pb)
+  
+  # Return as a single data frame or as a list of data frames, 
+  # depending on what option was selected.
+  if (bind) {
+    do.call(rbind, res)
+  } else {
+    res
+  }
+}
+```
+
+# Downloading mammal and bird data
+
+You can look in the data product catalog and manually figure out what the product codes are for small mammal trap data and for bird point count data, but I've provided them here. The `DP1` in the code indicates that this is Level 1 data. For Level 1 data, quality controls were run (Level 0 would be `DP0` meaning completely raw data) but the actual values are raw values measured in the field, not some kind of calculated quantity (Level 2 and higher would be derived values).
+
+```{r}
+mammal_code <- 'DP1.10072.001'
+bird_code <- 'DP1.10003.001'
+```
+
+## Mammal download
+
+Let's take a look at what files are available for NEON small mammal trapping data for a given site-month combination. Running this takes a minute or two and requires an internet connection because we are querying the API.
+
+```{r, message = FALSE}
+display_neon_filenames(mammal_code)
+```
+
+You can see that there are a lot of files available for one site. However the one we are interested in is the file containing the mammals caught per trap per night in the basic data package (expanded data package contains other variables that might be needed for quality control but that we are not interested in here). Let's pull that CSV file for all site-month combinations and combine it into one huge data frame that we can run analysis on. We specify we want everything belonging to the mammal code that contains the string `pertrapnight` in the file name, and by default only get the basic data package. Running this code on your own machine will take quite a few minutes since it has to download a lot of data, but you should get a progress bar showing how much time is remaining.
+
+```{r, message = FALSE, results = 'hide', warning = FALSE}
+mammal_data <- pull_all_neon_data(productCode = mammal_code, 
+                                  nametag = 'pertrapnight')
+```
+
+Now let's take a look at what is in that data frame . . . 
+
+```{r}
+str(mammal_data)
+```
+
+## Bird data
+
+Next, let's look at what data are available for birds.
+
+```{r}
+display_neon_filenames(bird_code)
+```
+
+Since the string `count` is in the name of the data file that we want for each site-month combination (the raw point count data for birds), we use that to pull point count data for each month and stick it all into one big data frame.
+
+```{r, message = FALSE, results = 'hide', warning = FALSE}
+bird_data <- pull_all_neon_data(productCode = bird_code, 
+                                nametag = 'count')
+```
+
+Let's see what is in that data frame . . . 
+
+```{r}
+str(bird_data)
+```
+
+\newpage
+
+# Using NEON data to test hypotheses
+
+## Bergmann's Rule
+
+Bergmann's rule is a famous macroecological pattern stating that average body sizes of (warm-blooded) animals should increase with increasing latitude. Bergmann, a physiologist working in the 19th century, speculated that animals living in colder areas further from the equator tend to be larger so that they have a smaller surface area to volume ratio and can more effectively retain heat. Later, people proposed additional mechanisms for why the pattern might exist. Also, some people even debated whether the pattern exists at all! **add more background material here**. Here, we tackle this question using the NEON small mammal dataset.
+
+NEON's mammal and bird data have latitudes for all the sites included in the data. Only the mammal data is suitable for testing Bergmann's rule because only the mammals are captured and weighed. 
+
+### Processing data
+
+We should first find the mean body mass for each species at each site, along with their latitudes. We will use functions from the R package `dplyr` to quickly manipulate the data frame.
+
+The mammal data frame is huge, with over 600K rows. Most of the rows record trap-nights where no mammal was captured. Let's get rid of those.
+
+```{r, message = FALSE}
+library(dplyr)
+nrow(mammal_data)
+table(mammal_data$trapStatus)
+```
+
+You can see that only status 4 and 5 correspond to one or more mammals caught in the trap. Filter the data frame to only keep those rows. We use the function `grepl()` which matches a regular expression to a vector of strings and returns `TRUE` if they match. The regular expression `"4|5"` means any string with the numerals 4 or 5 in it.
+
+```{r}
+mammal_data <- mammal_data %>%
+  filter(grepl('4|5', trapStatus))
+
+nrow(mammal_data)
+```
+
+We are down to ~70K rows where mammals were captured. Many of the mammals were not weighed so keep only the rows with a non-NA value for weight.
+
+```{r}
+mammal_data <- mammal_data %>%
+  filter(!is.na(weight))
+
+nrow(mammal_data)
+```
+
+We are down below 60K rows. Next, many records are for mammals where the same individual was captured multiple times. Keep only the rows where the recapture status is "N" for not a recapture.
+
+```{r}
+mammal_data <- mammal_data %>%
+  filter(recapture %in% 'N')
+
+nrow(mammal_data)
+```
+
+We are now at ~25K rows. Let's take the mean value of each species at each site, as well as the number of individuals used to calculate the mean, then get rid of any species-site combination with less than 5 individuals to ensure that we have a good estimate of the mean for all the species-site combinations.
+
+```{r}
+mammal_means <- mammal_data %>%
+  group_by(siteID, taxonID) %>%
+  summarize(mean_mass = mean(weight), n_individuals = n()) %>%
+  filter(n_individuals >= 5)
+```
+
+In addition, we need to get rid of the species that are found at 2 or fewer sites because it is not robust to try to infer a trend within species from so few data points.
+
+```{r}
+mammal_means <- mammal_means %>%
+  ungroup %>%
+  group_by(taxonID) %>%
+  mutate(n_sites = length(siteID)) %>%
+  filter(n_sites >= 3)
+
+mammal_means
+```
+
+We are left with 177 species-site combinations.
+
+Now that we have the mean value of body mass for each species and each site, let's make a scatterplot to visualize the pattern. We need to get the mean latitude value for each site and join it with our mean mass data frame so that we can plot mass versus latitude. Since all the sites are in the northern hemisphere, all latitude values are positive in the NEON dataset.
+
+```{r, message = FALSE}
+latitudes <- mammal_data %>%
+  group_by(siteID) %>%
+  summarize(latitude = mean(decimalLatitude))
+
+mammal_means <- left_join(mammal_means, latitudes)
+
+library(ggplot2)
+
+p <- ggplot(mammal_means, aes(x = latitude, y = mean_mass, color = taxonID)) +
+  geom_point() +
+  theme_bw()
+
+p
+```
+
+That's hard to see any pattern in, so let's try looking at the y-axis on a log scale.
+
+```{r}
+p + 
+  scale_y_log10(name = 'Mass (g)')
+```
+
+Still hard to see a pattern so just for visualization purposes, plot a separate simple linear regression for each species on the scatterplot.
+
+```{r}
+p +
+  scale_y_log10(name = 'Mass (g)') +
+  stat_smooth(method = 'lm', aes(group = taxonID), se = FALSE)
+```
+
+It looks like a number of species have positive trends where body size increases with latitude moving away from the equator as Bergmann predicted. However there are clearly some exceptions, and a lot of the positive trends are pretty weak. That gives us a rough visual test of the hypothesis: I would argue we can say that it probably isn't supported or might have weak support at best from this small mammal dataset, but other people might have a different opinion.
+
+A formal way to test the hypothesis that body mass increases with latitude is to use a mixed-effects model. Our model will fit a random intercept to each species (because each species has its own characteristic mass) and use latitude as the fixed effect (it estimates a single slope of body mass change versus latitude change across all species). We will use the `lmer` function from the R package `lme4` to fit the mixed model.
+
+```{r, message = FALSE}
+library(lme4)
+
+randomintercept_fit <- lmer(log10(mean_mass) ~ latitude + (1|taxonID), data = mammal_means)
+
+summary(randomintercept_fit)
+```
+
+The default summary information shows that the coefficient on latitude is positive but close to zero. We can generate a confidence interval on that coefficient by fitting the model many times with bootstrapped resamples of the original dataset. This takes a few seconds.
+
+```{r}
+confint(randomintercept_fit, method = 'boot', nsim = 999)
+```
+
+The confidence interval of the slope coefficient on latitude overlaps zero, meaning we have no support for the statement that there is any relationship between small mammal body mass and latitude, whether positive or negative.
+
+Another summary statistic we might be interested in is the variation explained by the fixed effect (latitude). A method was recently developed to partition that variation from the total variation and get an R-squared for it.
+
+```{r}
+library(r2glmm)
+
+r2beta(randomintercept_fit, method = 'kr', partial = FALSE)
+```
+The R-squared is essentially zero, further confirming our intuition that there is no relationship.
+
+There are other ways to fit the model. For instance you could fit both a random intercept and a random slope to each species. You could also ignore the variation due to species entirely. As an exercise, try out some of those alternative ways of fitting the model. Do they have any effect on our inference?
+
+You might have noticed that we have ignored any body mass variation within a single species at a single site. As an additional exercise, fit a model including this individual variation. Does it have any effect on our inference?
+
+As a conceptual exercise, do some research on tests of Bergmann's rule in different taxonomic groups. Is there any consensus about what we would expect for small mammals such as rodents in particular? Has Bergmann's Rule stood the test of time?
