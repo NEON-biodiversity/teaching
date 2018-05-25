@@ -144,7 +144,9 @@ str(bird_data)
 
 First, let's make a map of bird species richness within one of the NEON sites. There are multiple bird survey grids at a site. As an example, we will use the Oak Ridge National Laboratory (ORNL) site. First, let's find the species richness at each bird plot at that site by taking the subset of the bird data from ORNL, grouping by plot, and counting the number of unique taxon IDs.
 
-```{r}
+```{r, message = FALSE}
+library(ggplot2)
+
 (bird_ornl <- bird_data %>% 
   filter(siteID %in% 'ORNL') %>%
   group_by(plotID) %>%
@@ -153,7 +155,8 @@ First, let's make a map of bird species richness within one of the NEON sites. T
 We have 13 plots with varying species richness. Unfortunately, the coordinates of the plots are not included in the bird data. The plot metadata are not easily accessible via the API. I have downloaded them manually and stored them locally in a CSV which I load here, then join with the richness data.
 
 ```{r}
-plot_metadata <- read.csv('~/GitHub/NEON_repos/teaching/grad_lab/All_Neon_TOS_Centroid_V4.csv', stringsAsFactors = FALSE)
+plot_metadata <- read.csv('~/GitHub/NEON_repos/teaching/grad_lab/All_Neon_TOS_Centroid_V4.csv', 
+                          stringsAsFactors = FALSE)
 
 bird_ornl <- plot_metadata %>%
   select(siteID, plotID, easting, northing, elevation) %>%
@@ -190,7 +193,9 @@ Next find the centroid of each site in lat-long and join with bird richness.
 ```{r}
 bird_richness <- plot_metadata %>%
   group_by(siteID) %>%
-  summarize(elevation = mean(elevation), latitude = mean(latitude), longitude = mean(longitude)) %>%
+  summarize(elevation = mean(elevation), 
+            latitude = mean(latitude), 
+            longitude = mean(longitude)) %>%
   right_join(bird_richness)
 ```
 Alaska and Puerto Rico are included here; we can get rid of them by filtering on latitude.
@@ -210,7 +215,11 @@ ggplot(bird_richness, aes(x = longitude, y = latitude, fill = richness)) +
   geom_point(pch = 21, size = 3) +
   scale_fill_gradient(low = 'blue', high = 'red') +
   theme_bw() +
-  coord_map(projection = 'albers', lat0 = 23, lat1 = 30, xlim = c(-127, -65), ylim = c(25,50))
+  coord_map(projection = 'albers', 
+            lat0 = 23, 
+            lat1 = 30, 
+            xlim = c(-127, -65), 
+            ylim = c(25,50))
 ```
 
 As an exercise, do the same for mammal richness and for elevation.
@@ -287,6 +296,8 @@ mammal_means
 
 We are left with 177 species-site combinations.
 
+### Visualizing data
+
 Now that we have the mean value of body mass for each species and each site, let's make a scatterplot to visualize the pattern. We need to get the mean latitude value for each site and join it with our mean mass data frame so that we can plot mass versus latitude. Since all the sites are in the northern hemisphere, all latitude values are positive in the NEON dataset.
 
 ```{r, message = FALSE}
@@ -321,13 +332,15 @@ p +
 ```
 
 
-It looks like a number of species have positive trends where body size increases with latitude moving away from the equator as Bergmann predicted. However there are clearly some exceptions, and a lot of the positive trends are pretty weak. That gives us a rough visual test of the hypothesis: I would argue we can say that it probably isn't supported or might have weak support at best from this small mammal dataset, but other people might have a different opinion.
+### Testing the hypothesis
+
+From the last plot we made, it looks like a number of species have positive trends where body size increases with latitude moving away from the equator as Bergmann predicted. However there are clearly some exceptions, and a lot of the positive trends are pretty weak. That gives us a rough visual test of the hypothesis: I would argue we can say that it probably isn't supported or might have weak support at best from this small mammal dataset, but other people might have a different opinion.
 
 A formal way to test the hypothesis that body mass increases with latitude is to use a mixed-effects model. Our model will fit a random intercept to each species (because each species has its own characteristic mass) and use latitude as the fixed effect (it estimates a single slope of body mass change versus latitude change across all species). 
 
 First, let's confirm that the log transformation is a good idea by looking at histograms of the untransformed mass values as well as the log-transformed values.
 
-```{r}
+```{r, fig.height = 4, fig.width = 4}
 p_hist <- ggplot(mammal_means, aes(x = mean_mass)) +
   geom_histogram(bins = 20) + 
   theme_bw() +
@@ -367,8 +380,14 @@ r2beta(randomintercept_fit, method = 'kr', partial = FALSE)
 ```
 The R-squared is essentially zero, further confirming our intuition that there is no relationship.
 
+### Exercises
+
 There are other ways to fit the model. For instance you could fit both a random intercept and a random slope to each species. You could also ignore the variation due to species entirely. As an exercise, try out some of those alternative ways of fitting the model. Do they have any effect on our inference?
 
 You might have noticed that we have ignored any body mass variation within a single species at a single site. As an additional exercise, fit a model including this individual variation. Does it have any effect on our inference?
 
 As a conceptual exercise, do some research on tests of Bergmann's rule in different taxonomic groups. Is there any consensus about what we would expect for small mammals such as rodents in particular? Has Bergmann's Rule stood the test of time?
+
+### Further reading
+
+*Add content here.*
