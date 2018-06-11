@@ -2,7 +2,7 @@
 # QDR 11 May 2018
 
 # Source functions to pull data
-source('~/GitHub/NEON/code/data_extraction/datapull_neonapi_fns.r')
+source('~/GitHub/NEON_repos/NEON/code/data_extraction/datapull_neonapi_fns.r')
 
 # Codes for mammal and bird data
 mammal_code <- 'DP1.10072.001'

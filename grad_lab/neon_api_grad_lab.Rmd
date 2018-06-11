@@ -5,6 +5,10 @@ date: "May 24, 2018"
 output: pdf_document
 ---
 
+# Modification history
+
+* **6 June 2018**: Now site locations are pulled from the API instead of being loaded locally.
+
 # Acknowledgments
 
 Some of this code is modified from the tutorial written by NEON data scientist Claire Lunch (see `https://www.neonscience.org/neon-api-usage`). She should be given appropriate credit.
@@ -15,9 +19,11 @@ Insert text here.
 
 # Technical description of NEON data
 
-This lab is a walkthrough demonstrating how to use the API (application program interface) of NEON (National Ecological Observatory Network) to import and analyze data. Through the NEON project, ecological and environmental data are collected using standardized methods at many sites across the United States. NEON puts the data through a quality control "pipeline" and then hosts it on their web server. An API is an interface that allows the user to specify exactly which data they want to pull from NEON's data server. The user pastes together a web address using different codes to construct their query. When it is submitted to the API, the API returns the requested data in a standardized format called JSON (basically a text file with information that can be easily processed by a lot of different types of software). There is already R code written to put together API queries, automatically pull the data from NEON, and then translate the JSON into a data frame that we can easily work with in R. 
+This lab is a walkthrough demonstrating how to use the API (application program interface) of NEON (National Ecological Observatory Network) to import and analyze data. Through the NEON project, ecological and environmental data are collected using standardized methods at many sites across the United States. NEON puts the data through a quality control "pipeline" and then hosts it on their web server. An API is an interface that allows the user to specify exactly which data they want to pull from NEON's data server. The user pastes together a web address using different codes to construct their query. When it is submitted to the API, the API returns the requested data in a standardized format called JSON (basically a text file with information that can be easily processed by a lot of different types of software). We have already written R code to put together API queries, automatically pull the data from NEON, and then translate the JSON into a data frame that we can easily work with in R. 
 
 NEON data are organized in a special structure. First, the data are grouped by data product. A data product would be something like air temperature, soil chemical composition, fish community composition, etc. The data products each have ID codes that you have to look up on the Data Product Catalog on NEON's website (`http://data.neonscience.org/data-product-catalog`) to be able to pull a particular product. Within each data product, the data are grouped by site, and within site they are grouped by month. So you could do something like pull all bird community data from the Great Smoky Mountains from July 2017.
+
+**Note**: This tutorial was written using some functions we wrote to access the NEON API. Since we wrote the tutorial, NEON data scientists have released a package called `neonUtilities` that includes a lot of "wrapper" functions for pulling and cleaning up NEON data from the API. They might be more user-friendly than what we have here. If there is interest, in future versions of this document we could show how to get the same data using the package, instead of or in addition to the way we show here. See `https://github.com/NEONScience/NEON-utilities` for updated info on the package.
 
 # R functions for pulling NEON data from the server
 
@@ -25,7 +31,7 @@ NEON data are organized in a special structure. First, the data are grouped by d
 
 This function takes a NEON product code `productCode` as an argument, gets a list of the files that are available, and displays a representative set of file names from one site-month combination.
 
-```{r}
+```{r fun1}
 display_neon_filenames <- function(productCode) {
   require(httr)
   require(jsonlite)
@@ -44,7 +50,7 @@ The first argument, `productCode` is a NEON product code, and the second, `namet
 
 There are two steps to what the function does: first it queries the API to get a list of URLs of the CSV files available for all site-month combinations for the desired data product. Second it loops through the subset of those URLs that match the `nametag` argument and tries to download them all. If one gives an error, there is a `try()` function built in so that the function will just skip that file instead of quitting.
 
-```{r}
+```{r fun2}
 pull_all_neon_data <- function(productCode, nametag, pkg = 'basic', bind = TRUE) {
   require(httr)
   require(jsonlite)
@@ -87,11 +93,42 @@ pull_all_neon_data <- function(productCode, nametag, pkg = 'basic', bind = TRUE)
 }
 ```
 
+## Function to get spatial information (coordinates) for a site or plot
+
+The spatial locations and metadata for sites and plots are stored in a different location on NEON's API from the actual data. This function should be called for a single site at a time (`siteID` argument). The second argument, `what`, is a string. The default is `"site"` which will return a single row of a data frame with spatial location for the entire site as a single point. If `what` is set to another string such as `"bird"` it will go through the spatial location data URLs, find all that have `"bird"` in the name, pull the spatial information from them, and return a data frame with one row per bird plot. In either case the data frame has 19 columns (the number of location attributes NEON has listed for each site or plot).
+
+```{r fun3}
+get_site_locations <- function(siteID, what = 'site') {
+  require(httr)
+  require(jsonlite)
+  require(purrr)
+  # URLs of all spatial information about the site
+  req <- GET(paste0("http://data.neonscience.org/api/v0/locations/", siteID))
+  site_loc <- fromJSON(content(req, as = 'text'), simplifyDataFrame = TRUE, flatten = TRUE)
+  
+  if (what == 'site') {
+    # If only coordinates of the entire site are needed, return them
+    return(data.frame(site_loc$data[1:19]))
+  } else {
+    # If "what" is some type of plot, find all URLs for that plot type
+    urls <- grep(what, site_loc$data$locationChildrenUrls, value = TRUE)
+    # Get the coordinates for each of those plots from each URL and return them
+    loc_info <- map_dfr(urls, function(url) {
+      req <- GET(url)
+      loc <- fromJSON(content(req, as = 'text'), simplifyDataFrame = TRUE, flatten = TRUE)
+      loc[[1]][1:19]
+    })
+    return(loc_info)
+  }
+}
+```
+
+
 # Downloading mammal and bird data
 
-You can look in the data product catalog and manually figure out what the product codes are for small mammal trap data and for bird point count data, but I've provided them here. The `DP1` in the code indicates that this is Level 1 data. For Level 1 data, quality controls were run (Level 0 would be `DP0` meaning completely raw data) but the actual values are raw values measured in the field, not some kind of calculated quantity (Level 2 and higher would be derived values).
+You can look in the data product catalog and manually figure out what the product codes are for small mammal trap data and for bird point count data, but I've provided them here. The `DP1` in the code indicates that this is Level 1 data. For Level 1 data, quality controls were run (Level 0 would be `DP0` meaning completely raw data) but the actual values are still raw values measured in the field, not some kind of calculated quantity (Level 2 and higher would be derived values).
 
-```{r}
+```{r productcodes}
 mammal_code <- 'DP1.10072.001'
 bird_code <- 'DP1.10003.001'
 ```
@@ -100,20 +137,20 @@ bird_code <- 'DP1.10003.001'
 
 Let's take a look at what files are available for NEON small mammal trapping data for a given site-month combination. Running this takes a minute or two and requires an internet connection because we are querying the API.
 
-```{r, message = FALSE}
+```{r display_mam, message = FALSE}
 display_neon_filenames(mammal_code)
 ```
 
 You can see that there are a lot of files available for one site. However the one we are interested in is the file containing the mammals caught per trap per night in the basic data package (expanded data package contains other variables that might be needed for quality control but that we are not interested in here). Let's pull that CSV file for all site-month combinations and combine it into one huge data frame that we can run analysis on. We specify we want everything belonging to the mammal code that contains the string `pertrapnight` in the file name, and by default only get the basic data package. Running this code on your own machine will take quite a few minutes since it has to download a lot of data, but you should get a progress bar showing how much time is remaining.
 
-```{r, message = FALSE, results = 'hide', warning = FALSE}
+```{r pull_mam, message = FALSE, results = 'hide', warning = FALSE}
 mammal_data <- pull_all_neon_data(productCode = mammal_code, 
                                   nametag = 'pertrapnight')
 ```
 
 Now let's take a look at what is in that data frame . . . 
 
-```{r}
+```{r str_mam}
 str(mammal_data)
 ```
 
@@ -121,20 +158,20 @@ str(mammal_data)
 
 Next, let's look at what data are available for birds.
 
-```{r}
+```{r display_bird}
 display_neon_filenames(bird_code)
 ```
 
 Since the string `count` is in the name of the data file that we want for each site-month combination (the raw point count data for birds), we use that to pull point count data for each month and stick it all into one big data frame.
 
-```{r, message = FALSE, results = 'hide', warning = FALSE}
+```{r pull_bird, message = FALSE, results = 'hide', warning = FALSE}
 bird_data <- pull_all_neon_data(productCode = bird_code, 
                                 nametag = 'count')
 ```
 
 Let's see what is in that data frame . . . 
 
-```{r}
+```{r str_bird}
 str(bird_data)
 ```
 
@@ -142,9 +179,11 @@ str(bird_data)
 
 # Making maps with NEON data
 
+## Map within a single site
+
 First, let's make a map of bird species richness within one of the NEON sites. There are multiple bird survey grids at a site. As an example, we will use the Oak Ridge National Laboratory (ORNL) site. First, let's find the species richness at each bird plot at that site by taking the subset of the bird data from ORNL, grouping by plot, and counting the number of unique taxon IDs.
 
-```{r, message = FALSE}
+```{r map1, message = FALSE}
 library(ggplot2)
 
 (bird_ornl <- bird_data %>% 
@@ -152,64 +191,77 @@ library(ggplot2)
   group_by(plotID) %>%
   summarize(richness = length(unique(taxonID))))
 ```
-We have 13 plots with varying species richness. Unfortunately, the coordinates of the plots are not included in the bird data. The plot metadata are not easily accessible via the API. I have downloaded them manually and stored them locally in a CSV which I load here, then join with the richness data.
+We have 13 plots with varying species richness. Unfortunately, the coordinates of the plots are not included in the bird data. The plot metadata must be pulled separately from the API for each site. Here, I get the locations for all bird survey grids at Oak Ridge, then join them with the richness data.
 
-```{r}
-plot_metadata <- read.csv('~/GitHub/NEON_repos/teaching/grad_lab/All_Neon_TOS_Centroid_V4.csv', 
-                          stringsAsFactors = FALSE)
+```{r map2, message = FALSE, results = 'hide', warning = FALSE}
+bird_ornl_locations <- get_site_locations(siteID = 'ORNL', what = 'bird')
+```
 
-bird_ornl <- plot_metadata %>%
-  select(siteID, plotID, easting, northing, elevation) %>%
+The location names are given as a long string so we need to extract the substring before the first period to join the locations with the richness values. We are using the base R function `strsplit()` to split the string on each period, and the `map_chr()` function from the package `purrr` to pull the first item out of each list element returned by `strsplit()`. Since `strsplit()` returns a list, `map_chr()` helps us transform the result of splitting the string back into a vector that becomes a data frame column.
+
+```{r map3, message = FALSE}
+bird_ornl_locations$locationName[1:3]
+
+library(purrr)
+
+bird_ornl <- bird_ornl_locations %>%
+  mutate(locationName = map_chr(strsplit(locationName, '\\.'), 1)) %>%
+  rename(plotID = locationName) %>%
   right_join(bird_ornl)
 
-nrow(bird_ornl)
+dim(bird_ornl)
+names(bird_ornl)
 ```
-There are now multiple rows for each bird plot because some of the plots are marked at each corner while others are only marked with the centroid. To simplify things, we take the mean latitude and longitude of each plot (the centroid) and make a map with each plot represented by a point colored by the bird species richness there. We take the mean of elevation as well.
 
-```{r}
-bird_ornl <- bird_ornl %>%
-  select(-siteID) %>%
-  group_by(plotID) %>%
-  summarize_all(.funs = mean)
+There are now a lot of useful spatial columns along with richness for each of the bird plots at Oak Ridge. Let's make a map with each plot represented by a point colored by the bird species richness there, and labeled with the elevation rounded to the nearest meter for good measure. 
 
-ggplot(bird_ornl, aes(x = easting, y = northing, color = richness)) +
-  geom_point(size = 3) +
+```{r map4}
+ggplot(bird_ornl, 
+       aes(x = locationUtmEasting, y = locationUtmNorthing)) +
+  geom_point(aes(color = richness), size = 3) +
+  # The vjust argument below moves the text down slightly.
+  geom_text(aes(label = paste(round(locationElevation), 'm')), vjust = 1.2) +
   scale_color_gradient(low = 'blue', high = 'red') +
   theme_bw()
 
 ```
-This is a map of the bird richness at Oak Ridge. It might be more interesting to plot the bird richness across the United States. While before we used the projected coordinates provided by NEON, here we can use the latitudes and longitudes, then use the mapping capability of `ggplot2` to draw a projected map.
+So we've made a map of how bird richness varies spatially within the boundaries of the Oak Ridge study site. As an exercise, subset the bird data for a different site and make a map of a different variable such as the total number of individual birds observed at each survey grid in a particular year.
+
+## Map of all sites in the contiguous USA
+
+It might also be interesting to plot bird richness across the United States. While before we used the projected coordinates provided by NEON, here we can use the latitudes and longitudes, then use the mapping capability of `ggplot2` to draw a map with our preferred projection.
 
 First, find the species richness at each site by counting the number of unique taxa.
 
-```{r}
+```{r map5}
 bird_richness <- bird_data %>%
   group_by(siteID) %>%
   summarize(richness = length(unique(taxonID)))
 ```
 
-Next find the centroid of each site in lat-long and join with bird richness.
+Next we need to pull the site centroids in lat-long for all the sites in the bird richness dataset. We do this by accessing the API again. A function from `purrr` called `map_dfr()` helps us loop through all the sites, get the overall location info, and tidily store it in a single data frame that we can easily join with the richness data frame.
 
-```{r}
-bird_richness <- plot_metadata %>%
-  group_by(siteID) %>%
-  summarize(elevation = mean(elevation), 
-            latitude = mean(latitude), 
-            longitude = mean(longitude)) %>%
+```{r map6, message = FALSE, warning = FALSE}
+site_coordinates <- map_dfr(bird_richness$siteID, get_site_locations, what = 'site')
+
+bird_richness <- site_coordinates %>%
+  rename(siteID = locationName) %>%
   right_join(bird_richness)
 ```
-Alaska and Puerto Rico are included here; we can get rid of them by filtering on latitude.
 
-```{r}
+Alaska and Puerto Rico are included here; we can get rid of them by filtering on latitude. *This simplifies making the map for now, since including insets for Alaska, etc. adds a lot of nuisance steps to making the map. But never fear, it can be done! If there is interest we can add that step to a future version of this tutorial.*
+
+```{r map7}
 bird_richness <- bird_richness %>%
-  filter(between(latitude, 25, 50))
+  filter(between(locationDecimalLatitude, 25, 50))
 ```
 
 
-Create a map using the built-in US state borders, with site points colored by bird species richness. Use the `coord_map` function to specify a projection. The Albers equal-area projection with arguments `lat0 = 23` and `lat1 = 30` is ideal for mapping the continental USA. 
+Create a map using the built-in US state borders, with site points colored by bird species richness. Use the `coord_map()` function to specify a projection. The Albers equal-area projection with arguments `lat0 = 23` and `lat1 = 30` is ideal for mapping the continental USA. We also use `coord_map()` to specify the range of latitude and longitude to plot.  The `borders('state')` and `borders('world')` elements add the state borders and the borders of Canada and Mexico, respectively.
 
-```{r}
-ggplot(bird_richness, aes(x = longitude, y = latitude, fill = richness)) +
+```{r map8, message = FALSE, warning = FALSE}
+ggplot(bird_richness, 
+       aes(x = locationDecimalLongitude, y = locationDecimalLatitude, fill = richness)) +
   borders('state') +
   borders('world') +
   geom_point(pch = 21, size = 3) +
@@ -240,7 +292,7 @@ We should first find the mean body mass for each species at each site, along wit
 
 The mammal data frame is huge, with over 600K rows. Most of the rows record trap-nights where no mammal was captured. Let's get rid of those.
 
-```{r, message = FALSE}
+```{r thinmam1, message = FALSE}
 library(dplyr)
 nrow(mammal_data)
 table(mammal_data$trapStatus)
@@ -248,7 +300,7 @@ table(mammal_data$trapStatus)
 
 You can see that only status 4 and 5 correspond to one or more mammals caught in the trap. Filter the data frame to only keep those rows. We use the function `grepl()` which matches a regular expression to a vector of strings and returns `TRUE` if they match. The regular expression `"4|5"` means any string with the numerals 4 or 5 in it.
 
-```{r}
+```{r thinmam2}
 mammal_data <- mammal_data %>%
   filter(grepl('4|5', trapStatus))
 
@@ -257,7 +309,7 @@ nrow(mammal_data)
 
 We are down to ~70K rows where mammals were captured. Many of the mammals were not weighed so keep only the rows with a non-NA value for weight.
 
-```{r}
+```{r thinmam3}
 mammal_data <- mammal_data %>%
   filter(!is.na(weight))
 
@@ -266,7 +318,7 @@ nrow(mammal_data)
 
 We are down below 60K rows. Next, many records are for mammals where the same individual was captured multiple times. Keep only the rows where the recapture status is "N" for not a recapture.
 
-```{r}
+```{r thinmam4}
 mammal_data <- mammal_data %>%
   filter(recapture %in% 'N')
 
@@ -275,7 +327,7 @@ nrow(mammal_data)
 
 We are now at ~25K rows. Let's take the mean value of each species at each site, as well as the number of individuals used to calculate the mean, then get rid of any species-site combination with less than 5 individuals to ensure that we have a good estimate of the mean for all the species-site combinations.
 
-```{r}
+```{r thinmam5}
 mammal_means <- mammal_data %>%
   group_by(siteID, taxonID) %>%
   summarize(mean_mass = mean(weight), n_individuals = n()) %>%
@@ -284,7 +336,7 @@ mammal_means <- mammal_data %>%
 
 In addition, we need to get rid of the species that are found at 2 or fewer sites because it is not robust to try to infer a trend within species from so few data points.
 
-```{r}
+```{r thinmam6}
 mammal_means <- mammal_means %>%
   ungroup %>%
   group_by(taxonID) %>%
@@ -300,7 +352,7 @@ We are left with 177 species-site combinations.
 
 Now that we have the mean value of body mass for each species and each site, let's make a scatterplot to visualize the pattern. We need to get the mean latitude value for each site and join it with our mean mass data frame so that we can plot mass versus latitude. Since all the sites are in the northern hemisphere, all latitude values are positive in the NEON dataset.
 
-```{r, message = FALSE}
+```{r vismam1, message = FALSE}
 latitudes <- mammal_data %>%
   group_by(siteID) %>%
   summarize(latitude = mean(decimalLatitude))
@@ -318,14 +370,14 @@ p
 
 That's hard to see any pattern in, so let's try looking at the y-axis on a log scale.
 
-```{r}
+```{r vismam2}
 p + 
   scale_y_log10(name = 'Mass (g)')
 ```
 
 Still hard to see a pattern so just for visualization purposes, plot a separate simple linear regression for each species on the scatterplot.
 
-```{r}
+```{r vismam3}
 p +
   scale_y_log10(name = 'Mass (g)') +
   stat_smooth(method = 'lm', aes(group = taxonID), se = FALSE)
@@ -340,7 +392,7 @@ A formal way to test the hypothesis that body mass increases with latitude is to
 
 First, let's confirm that the log transformation is a good idea by looking at histograms of the untransformed mass values as well as the log-transformed values.
 
-```{r, fig.height = 4, fig.width = 4}
+```{r testmam1, fig.height = 4, fig.width = 4}
 p_hist <- ggplot(mammal_means, aes(x = mean_mass)) +
   geom_histogram(bins = 20) + 
   theme_bw() +
@@ -355,7 +407,7 @@ The untransformed values are highly skewed, with many small species and a long t
 
 We will use the `lmer` function from the R package `lme4` to fit the mixed model.
 
-```{r, message = FALSE}
+```{r testmam2, message = FALSE}
 library(lme4)
 
 randomintercept_fit <- lmer(log10(mean_mass) ~ latitude + (1|taxonID), data = mammal_means)
@@ -365,7 +417,7 @@ summary(randomintercept_fit)
 
 The default summary information shows that the coefficient on latitude is positive but close to zero. We can generate a confidence interval on that coefficient by fitting the model many times with bootstrapped resamples of the original dataset. This takes a few seconds.
 
-```{r}
+```{r testmam3}
 confint(randomintercept_fit, method = 'boot', nsim = 999)
 ```
 
@@ -373,7 +425,7 @@ The confidence interval of the slope coefficient on latitude overlaps zero, mean
 
 Another summary statistic we might be interested in is the variation explained by the fixed effect (latitude). A method was recently developed to partition that variation from the total variation and get an R-squared for it.
 
-```{r}
+```{r testmam4}
 library(r2glmm)
 
 r2beta(randomintercept_fit, method = 'kr', partial = FALSE)
