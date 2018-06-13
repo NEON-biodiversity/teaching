@@ -1,8 +1,7 @@
 # All the raw R code from 'Graduate lab: Testing macroecological predictions with NEON'
 # author: qdr
 # date: June 13, 2018
-output: pdf_document
----
+
 
 #############################################################################################################################
 
