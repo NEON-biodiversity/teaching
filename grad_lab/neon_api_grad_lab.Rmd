@@ -181,7 +181,15 @@ str(bird_data)
 
 ## Map within a single site
 
-First, let's make a map of bird species richness within one of the NEON sites. There are multiple bird survey grids at a site. As an example, we will use the Oak Ridge National Laboratory (ORNL) site. First, let's find the species richness at each bird plot at that site by taking the subset of the bird data from ORNL, grouping by plot, and counting the number of unique taxon IDs.
+First, let's make a map of bird species richness within one of the NEON sites. There are multiple bird survey grids at a site.
+
+To see all the site codes that are in the bird species richness data frame, and see how many records are from each site, make a table of the column `siteID` from that data frame. Note: you can get more info about each of the sites on NEON's website at https://www.neonscience.org/field-sites/field-sites-map/list.
+
+```{r sitelist}
+table(bird_data$siteID)
+```
+
+As an example, we will use the Oak Ridge National Laboratory (ORNL) site. First, let's find the species richness at each bird plot at that site by taking the subset of the bird data from ORNL, grouping by plot, and counting the number of unique taxon IDs.
 
 ```{r map1, message = FALSE}
 library(ggplot2)
